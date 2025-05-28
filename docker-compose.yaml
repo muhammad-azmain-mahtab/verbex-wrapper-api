@@ -1,0 +1,11 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: verbex-api-wrapper
+    ports:
+      - "4288:4288"
+    volumes:
+      - .:/app  
+    command: python app.py
