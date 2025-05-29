@@ -188,6 +188,7 @@ Fetches all call logs and related info from the Verbex internal API, used for vi
   - **Description:** Triggers immediate fetching of call logs from Verbex internal API.
   - **Request Body:** (empty)
   - **Response Example:**
+    
     ```json
     {
         "calls_processed": 55,
@@ -201,9 +202,9 @@ Fetches all call logs and related info from the Verbex internal API, used for vi
 
 ## Usage
 
-Once running, the API will listen for requests from the Verbex AI agent and proxy them to the configured third-party APIs (Magento/Salesforce).  
-The scheduled sync task will automatically fetch call logs for analytics at the defined interval.  
-You can also trigger call log synchronization manually via the `/fetch-call-logs` endpoint.
+ - Once running, the API will listen for requests from the Verbex AI agent and proxy them to the configured third-party APIs (Magento/Salesforce).  
+ - The scheduled sync task will automatically fetch call logs for analytics at the defined interval.  
+ - You can also trigger call log synchronization manually via the `/fetch-call-logs` endpoint.
 
 ## Configuration
 
