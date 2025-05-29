@@ -19,8 +19,114 @@ The main purpose of this API is to:
 ## Prerequisites
 
 - Docker and Docker Compose installed on your system.
+- Setup Magento and Salesforce (see instructions below).
 - Access credentials for Magento and Salesforce services.
 - Python 3.8+ (if running outside Docker).
+
+### <img src="https://cdn.jsdelivr.net/gh/devicons/devicon/icons/magento/magento-original.svg" alt="Magento" width="24" height="24" style="vertical-align:middle;margin-right:4px;"> Magento Setup
+
+1. **Create Magento Directory**
+    ```bash
+    mkdir -p ~/Sites/magento
+    cd ~/Sites/magento
+    ```
+
+2. **Initialize Project with Docker Magento Template**
+    ```bash
+    curl -s https://raw.githubusercontent.com/markshust/docker-magento/master/lib/template | bash
+    ```
+
+3. **Overwrite Compose File**
+    - Overwrite the content of `compose.dev-linux.yaml` to `compose.dev.yaml`.
+
+4. **Modify Healthcheck for OpenSearch**
+    - In `compose.healthcheck.yaml`, replace the `opensearch` section with:
+      
+      ```yaml
+      opensearch:
+        healthcheck:
+          test: "curl --fail opensearch:9200/_cat/health >/dev/null || exit 1"
+          interval: 5s
+          timeout: 5s
+          retries: 30
+      #      <<: *healthcheck-slow-start
+      ```
+
+6. **Download Magento Community Edition 2.4.8**
+    ```bash
+    bin/download community 2.4.8
+    ```
+
+7. **Run Magento Setup**
+    ```bash
+    bin/setup magento.test
+    ```
+
+8. **Deploy Sample Data**
+    ```bash
+    bin/magento sampledata:deploy
+    ```
+
+9. **Upgrade Magento Setup**
+    ```bash
+    bin/magento setup:upgrade
+    ```
+
+10. **Disable Two-Factor Authentication Modules**
+    ```bash
+    bin/magento module:disable Magento_TwoFactorAuth Magento_AdminAdobeImsTwoFactorAuth
+    ```
+
+11. **Upgrade Magento Setup Again**
+    ```bash
+    bin/magento setup:upgrade
+    ```
+
+### <img src="https://cdn.jsdelivr.net/gh/devicons/devicon/icons/salesforce/salesforce-original.svg" alt="Salesforce" width="24" height="24" style="vertical-align:middle;margin-right:4px;"> Salesforce Setup
+
+1. For Salesforce setup, please complete **steps 1 to 3** at the following link:  
+[https://docs.verbex.ai/tools/custom-tools-salesforce](https://docs.verbex.ai/tools/custom-tools-salesforce)
+
+2. Generate Access Token:  
+   In Setup, go to **Identity → OAuth and OpenID Connect Settings**.  
+   Make sure the following are turned on:
+    - Allow OAuth Username-Password Flows
+    - Allow OAuth User-Agent Flows
+    - Allow Authorization Code and Credentials Flows
+
+4. Use the following curl command template to get your access token:
+    ```bash
+    curl -X POST "https://login.salesforce.com/services/oauth2/token" \
+    -d "grant_type=password" \
+    -d "client_id=CONSUMER_KEY" \
+    -d "client_secret=CONSUMER_SECRET" \
+    -d "username=YOUR_SALESFORCE_USER_NAME" \
+    -d "password=YOUR_SALESFORCE_PASSWORD"
+    ```
+
+5. The response will include:
+    ```json
+    {
+      "access_token": "YOUR_ACCESS_TOKEN",
+      "instance_url": "https://your-instance.salesforce.com",
+      "id": "",
+      "token_type": "Bearer",
+      "issued_at": "",
+      "signature": ""
+    }
+    ```
+
+6. Test your access token and data sending with CURL or Postman:
+    ```bash
+    curl -X POST "<instance_url>/services/data/v59.0/sobjects/Lead/" \
+         -H 'Authorization: Bearer <access_token>' \
+         -H "Content-Type: application/json" \
+         -d '{
+             "LastName": "abc",
+             "Company": "xyz",
+             "Email": "abc.xyz@example.com"
+         }'
+    ```
 
 ## Setup & Installation
 
