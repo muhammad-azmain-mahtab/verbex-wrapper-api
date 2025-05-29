@@ -130,7 +130,17 @@ This command will build (if necessary) and start the API service in detached mod
   "phone": "1234567890"
 }
 ```
-**Response:** Returns Salesforce account and purchase info for the phone number.
+**Response Example:**
+
+```json
+{
+    "Customer Name": "Customer",
+    "Customer Phone": "1234567890",
+    "Past Purchase": "Fridge",
+    "Purchase ID": "84ajflaw23",
+    "Purchased on": "2025-08-02"
+}
+```
 
 ---
 
@@ -152,7 +162,7 @@ This command will build (if necessary) and start the API service in detached mod
 ```json
 {
   "message": "Case created successfully",
-  "case_id": "5005g00001ABCDE",
+  "case_id": "daw223da",
   "case_number": "00001001"
 }
 ```
@@ -169,7 +179,27 @@ This command will build (if necessary) and start the API service in detached mod
   "case_number": "00001001"
 }
 ```
-**Response:** Returns details about the Salesforce case.
+**Response Example:**
+
+```json
+{
+    "AccountId": "hafl23j11",
+    "CaseNumber": "00001050",
+    "ClosedDate": "2025-05-24T07:40:46.000+0000",
+    "CreatedDate": "2025-05-24T07:39:37.000+0000",
+    "Description": "TV display broken.",
+    "Id": "daw223da",
+    "Priority": "Medium",
+    "Reason": "Pending",
+    "Status": "Closed",
+    "Subject": "TV Issue",
+    "Type": "Service",
+    "attributes": {
+        "type": "Case",
+        "url": "/services/data/v59.0/sobjects/Case/daw223da"
+    }
+}
+```
 
 ---
 
