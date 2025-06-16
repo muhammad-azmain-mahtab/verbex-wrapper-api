@@ -10,6 +10,7 @@ import pandas as pd
 from apscheduler.schedulers.background import BackgroundScheduler
 import os
 from dotenv import load_dotenv
+import re
 
 load_dotenv()
 app = Flask(__name__)
@@ -222,6 +223,7 @@ def create_salesforce_ticket():
     priority = "Medium"
     case_type = data.get("type", "Pending")
     case_reason = data.get("reason", "Pending")
+    customer_name = data.get("customer_name")
 
     if not phone:
         return jsonify({"error": "Missing 'phone' in request body"}), 400
@@ -243,9 +245,17 @@ def create_salesforce_ticket():
         account_data = account_response.json()
 
         if not account_data["records"]:
-            return jsonify({"error": "No account found for this phone number."}), 404
-
-        account_id = account_data["records"][0]["Id"]
+            # Create new Account if none found
+            create_account_payload = {
+                "Name": customer_name,
+                "Phone": phone
+            }
+            create_url = f"{SALESFORCE_INSTANCE_URL}/services/data/v59.0/sobjects/Account"
+            create_response = requests.post(create_url, headers=headers, json=create_account_payload)
+            create_response.raise_for_status()
+            account_id = create_response.json().get("id")
+        else:
+            account_id = account_data["records"][0]["Id"]
 
         # Create Case
         payload = {
@@ -401,11 +411,27 @@ def fetch_and_store_calls(log_auto=False):
                 if not items:
                     continue
 
-                all_analyses.append({
-                    'call_id': call_id,
-                    'analysis_name': items[0].get('name'),
-                    'analysis_result': items[0].get('result')
-                })
+                for item in items:
+                    name = item.get('name')
+                    result = item.get('result')
+
+                    if name == 'Products Searched ' and result:
+                        # Split using regex to get numbered items (1. ..., 2. ..., etc.)
+                        products = re.split(r'\d+\.\s*', result)
+                        products = [p.strip() for p in products if p.strip()]  # remove empty entries
+
+                        for product in products:
+                            all_analyses.append({
+                                'call_id': call_id,
+                                'analysis_name': name.strip(),
+                                'analysis_result': product
+                            })
+                    else:
+                        all_analyses.append({
+                            'call_id': call_id,
+                            'analysis_name': name,
+                            'analysis_result': result
+                        })
 
             except Exception as e:
                 print(f"Analysis failed for {call_id}: {e}")
@@ -440,9 +466,70 @@ def sync_calls_endpoint():
     result = fetch_and_store_calls()
     return jsonify(result), 200
 
+@app.route("/trigger-outbound-call", methods=["POST"])
+def trigger_outbound_call():
+    data = {
+        "from_number": "+8809677601357",
+        "to_number": "+8801862610315",
+        "direction": "outbound",
+        "metadata": {
+            "call_type": "sales"
+        },
+        "pia_llm_dynamic_data": {
+            "Case ID": "00001100",
+            "Case Status": "Product Fixed",
+            "Case Subject": "Broken TV during delivery",
+            "Case Description": "The delivery person accidentally dropped the TV, resulting in damage. Requesting a replacement.",
+            "Call Reason": "rating"
+        }
+    }
+
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {AUTH_TOKEN}"
+    }
+    try:
+        response = requests.post('https://api.verbex.com/v1/calls/dial-outbound-phone-call', json=data, headers=headers)
+        response.raise_for_status()
+        result = response.json()
+    except requests.RequestException as e:
+        return jsonify({"error": str(e)}), 500
+
+    return jsonify(result), 200
+
+# def scheduled_outbound_call():
+#     data = {
+#         "from_number": "+8809677601357",
+#         "to_number": "+8801862610315",
+#         "direction": "outbound",
+#         "metadata": {
+#             "call_type": "sales"
+#         },
+#         "pia_llm_dynamic_data": {
+#             "Case ID": "00001100",
+#             "Case Status": "Product Fixed",
+#             "Case Subject": "Broken TV during delivery",
+#             "Case Description": "The delivery person accidentally dropped the TV, resulting in damage. Requesting a replacement.",
+#             "Call Reason": "rating"
+#         }
+#     }
+
+#     headers = {
+#         "Content-Type": "application/json",
+#         "Authorization": f"Bearer {AUTH_TOKEN}"
+#     }
+#     try:
+#         response = requests.post('https://api.verbex.com/v1/calls/dial-outbound-phone-call', json=data, headers=headers)
+#         response.raise_for_status()
+#         result = response.json()
+#         print(f"Scheduled call result: {result}")
+#     except requests.RequestException as e:
+#         print(f"Scheduled call error: {e}")
+
 if __name__ == "__main__":
     scheduler = BackgroundScheduler()
     scheduler.add_job(lambda: fetch_and_store_calls(log_auto=True), 'interval', minutes=SYNC_INTERVAL_MINUTES)
+    # scheduler.add_job(scheduled_outbound_call, 'interval', minutes=SYNC_INTERVAL_MINUTES)
     scheduler.start()
 
     app.run(host = '0.0.0.0', port = 4288, debug=True)
