@@ -84,15 +84,19 @@ The main purpose of this API is to:
 
 ### <img src="https://cdn.jsdelivr.net/gh/devicons/devicon/icons/salesforce/salesforce-original.svg" alt="Salesforce" width="24" height="24" style="vertical-align:middle;margin-right:4px;"> Salesforce Setup
 
-1. For Salesforce setup, please complete **steps 1 to 3** at the following link:  
+1. Enable Connected App Creation
+    - Go to **Setup** in Salesforce.
+    - Search for **External Client Apps** in the Quick Find box.
+    - Click on **External Client App Settings**.
+    - ✅ Turn on **Allow creation of connected apps**.
+    - Click on **New Connected App**.
+
+2. For Salesforce setup, please complete **steps 2 and 3** at the following link:  
 [https://docs.verbex.ai/tools/custom-tools-salesforce](https://docs.verbex.ai/tools/custom-tools-salesforce)
 
-2. Generate Access Token:  
+3. Generate Access Token:  
    In Setup, go to **Identity → OAuth and OpenID Connect Settings**.  
-   Make sure the following are turned on:
-    - Allow OAuth Username-Password Flows
-    - Allow OAuth User-Agent Flows
-    - Allow Authorization Code and Credentials Flows
+    - ✅ Turn on **Allow OAuth Username-Password Flows**
 
 4. Use the following curl command template to get your access token:
     ```bash
@@ -104,19 +108,19 @@ The main purpose of this API is to:
     -d "password=YOUR_SALESFORCE_PASSWORD"
     ```
 
-5. The response will include:
+   The response will include:
     ```json
     {
       "access_token": "YOUR_ACCESS_TOKEN",
       "instance_url": "https://your-instance.salesforce.com",
-      "id": "",
+      "id": "...",
       "token_type": "Bearer",
-      "issued_at": "",
-      "signature": ""
+      "issued_at": "...",
+      "signature": "..."
     }
     ```
 
-6. Test your access token and data sending with CURL or Postman:
+5. Test your access token and data sending with CURL or Postman:
     ```bash
     curl -X POST "<instance_url>/services/data/v59.0/sobjects/Lead/" \
          -H 'Authorization: Bearer <access_token>' \
@@ -126,6 +130,11 @@ The main purpose of this API is to:
              "Company": "xyz",
              "Email": "abc.xyz@example.com"
          }'
+    ```
+
+    The response will look like:
+    ```json
+    {"id":"...","success":true,"errors":[]}%  
     ```
 
 ## Setup & Installation

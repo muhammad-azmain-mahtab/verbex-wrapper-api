@@ -28,8 +28,8 @@ AUTH_TOKEN = os.getenv("AUTH_TOKEN")
 DB_URI = os.getenv("DB_URI")
 
 # Salesforce Configuration
-SALESFORCE_CLIENT_ID = os.getenv("SALESFORCE_CLIENT_ID")
-SALESFORCE_CLIENT_SECRET = os.getenv("SALESFORCE_CLIENT_SECRET")
+SALESFORCE_CONSUMER_ID = os.getenv("SALESFORCE_CONSUMER_ID")
+SALESFORCE_CONSUMER_SECRET = os.getenv("SALESFORCE_CONSUMER_SECRET")
 SALESFORCE_USERNAME = os.getenv("SALESFORCE_USERNAME")
 SALESFORCE_PASSWORD = os.getenv("SALESFORCE_PASSWORD")
 SALESFORCE_TOKEN_URL = os.getenv("SALESFORCE_TOKEN_URL")
@@ -82,8 +82,8 @@ def get_magento_token():
 def get_salesforce_token():
     payload = {
         'grant_type': 'password',
-        'client_id': SALESFORCE_CLIENT_ID,
-        'client_secret': SALESFORCE_CLIENT_SECRET,
+        'client_id': SALESFORCE_CONSUMER_ID,
+        'client_secret': SALESFORCE_CONSUMER_SECRET,
         'username': SALESFORCE_USERNAME,
         'password': SALESFORCE_PASSWORD
     }
