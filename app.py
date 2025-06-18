@@ -21,7 +21,10 @@ MAGENTO_USERNAME = os.getenv("MAGENTO_USERNAME")
 MAGENTO_PASSWORD = os.getenv("MAGENTO_PASSWORD")
 
 # Verbex AI Agent Configuration
-AI_AGENT_ID = os.getenv("AI_AGENT_ID")
+IN_ENG_AGENT_ID = os.getenv("IN_ENG_AGENT_ID")
+IN_BN_AGENT_ID = os.getenv("IN_BN_AGENT_ID")
+OUT_ENG_AGENT_ID = os.getenv("OUT_ENG_AGENT_ID")
+OUT_BN_AGENT_ID = os.getenv("OUT_BN_AGENT_ID")
 AUTH_TOKEN = os.getenv("AUTH_TOKEN")
 
 # Database Configuration
@@ -147,7 +150,7 @@ def get_products():
 
     except requests.exceptions.RequestException as e:
         return jsonify({"error": str(e)}), 500
-    
+
 @app.route("/salesforce-account", methods=["POST"])
 @log_request_input("/salesforce-account")
 def get_salesforce_account():
@@ -332,12 +335,12 @@ def get_case_info():
     except requests.exceptions.RequestException as e:
         return jsonify({"error": str(e)}), 500
 
-def fetch_and_store_calls(log_auto=False):
+def fetch_and_store_calls(agent_id=IN_ENG_AGENT_ID, log_auto=False):
     try:
         headers = {'Authorization': f'Bearer {AUTH_TOKEN}'}
         engine = create_engine(DB_URI)
 
-        calls_url = f"https://api.verbex.ai/v1/calls/?ai_agent_ids={AI_AGENT_ID}&page_size=1000"
+        calls_url = f"https://api.verbex.ai/v1/calls/?ai_agent_ids={agent_id}&page_size=1000"
         calls_response = requests.get(calls_url, headers=headers)
         calls_data = calls_response.json()
         calls = calls_data.get('calls', [])
@@ -383,7 +386,7 @@ def fetch_and_store_calls(log_auto=False):
                 if message_content != '':
                     all_messages.append({
                         'call_id': call_id,
-                        'ai_agent_id': AI_AGENT_ID,
+                        'ai_agent_id': agent_id,
                         'ai_agent_name': ai_agent_name,
                         'call_status': call_status,
                         'call_start_time': call_start_time,
@@ -400,7 +403,7 @@ def fetch_and_store_calls(log_auto=False):
                     })
 
             # Post-call analysis
-            analysis_url = f"https://api.verbex.ai/v2/ai-agents/{AI_AGENT_ID}/postcall-analysis/results/{call_id}"
+            analysis_url = f"https://api.verbex.ai/v2/ai-agents/{agent_id}/postcall-analysis/results/{call_id}"
             try:
                 analysis_response = requests.get(analysis_url, headers=headers)
                 analysis_json = analysis_response.json()
@@ -441,8 +444,22 @@ def fetch_and_store_calls(log_auto=False):
         df_messages = pd.DataFrame(all_messages)
         df_analysis = pd.DataFrame(all_analyses)
 
-        df_messages.to_sql("call_messages", engine, if_exists="replace", index=False)
-        df_analysis.to_sql("call_analysis", engine, if_exists="replace", index=False)
+        if agent_id == IN_BN_AGENT_ID:
+            mssg_table = "call_messages_in_bn"
+            anal_table = "call_analysis_in_bn"
+        elif agent_id == OUT_ENG_AGENT_ID:
+            mssg_table = "call_messages_out_en"
+            anal_table = "call_analysis_out_en"
+        elif agent_id == OUT_BN_AGENT_ID:
+            mssg_table = "call_messages_out_bn"
+            anal_table = "call_analysis_out_bn"
+        else:
+            mssg_table = "call_messages"
+            anal_table = "call_analysis"
+        
+
+        df_messages.to_sql(mssg_table, engine, if_exists="replace", index=False)
+        df_analysis.to_sql(anal_table, engine, if_exists="replace", index=False)
 
         if log_auto:
             print(f"[AUTO SYNC] Synced {len(calls)} calls, {len(df_messages)} messages, {len(df_analysis)} analyses.")
@@ -461,26 +478,101 @@ def fetch_and_store_calls(log_auto=False):
             "error": str(e)
         }
 
-@app.route("/sync-calls", methods=["GET"])
+def fetch_salesforce_cases():
+    access_token = get_salesforce_token()
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json"
+    }
+
+    limit = request.args.get("limit", 200, type=int) 
+
+    base_query = (
+        "SELECT Id, CaseNumber, Subject, Status, Priority, Origin, Type, Reason, AccountId, CreatedDate, ClosedDate "
+        "FROM Case "
+        f"WHERE Owner.Username = '{SALESFORCE_USERNAME}'"
+    )
+
+    base_query += f" ORDER BY CreatedDate DESC LIMIT {limit}"
+
+    encoded_query = quote_plus(base_query)
+    query_url = f"{SALESFORCE_INSTANCE_URL}/services/data/v59.0/query?q={encoded_query}"
+
+    cases = []
+
+    try:
+        while query_url:
+            response = requests.get(query_url, headers=headers)
+            response.raise_for_status()
+            data = response.json()
+
+            cases.extend(data.get("records", []))
+
+            next_records_url = data.get("nextRecordsUrl")
+            if next_records_url:
+                query_url = f"{SALESFORCE_INSTANCE_URL}{next_records_url}"
+            else:
+                break
+        
+        if cases:
+            try:
+                df_cases = pd.DataFrame(cases)
+                
+                if 'attributes' in df_cases.columns:
+                    df_cases = df_cases.drop(columns=['attributes'])
+
+                engine = create_engine(DB_URI)
+                df_cases.to_sql("salesforce_cases", engine, if_exists="replace", index=False)
+                
+                print(f"Successfully saved {len(df_cases)} Salesforce cases to the 'salesforce_cases' table.")
+
+            except Exception as db_error:
+                print(f"[ERROR] Could not save Salesforce cases to database: {db_error}")
+
+        return {
+            "tickets_saved": len(cases),
+        }
+
+    except requests.exceptions.RequestException as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/sync-calls-tickets", methods=["GET"])
 def sync_calls_endpoint():
-    result = fetch_and_store_calls()
-    return jsonify(result), 200
+    calls_in_eng = fetch_and_store_calls(agent_id=IN_ENG_AGENT_ID)
+    calls_in_bn = fetch_and_store_calls(agent_id=IN_BN_AGENT_ID)
+    calls_out_eng = fetch_and_store_calls(agent_id=OUT_ENG_AGENT_ID)
+    # calls_out_bn = fetch_and_store_calls_out(agent_id=OUT_BN_AGENT_ID)
+    cases = fetch_salesforce_cases()
+    return jsonify({
+        "calls_in_eng": calls_in_eng,
+        "calls_in_bn": calls_in_bn, 
+        "calls_out_eng": calls_out_eng, 
+        # "calls_out_bn": calls_out_bn,  
+        "cases": cases
+        }), 200
+
+# PRIOR KNOWLEDGE
+# - **Phone Number:** 01852341413
+# - **Case ID:** 00001100
+# - **Case Status:** Product Fixed
+# - **Case Subject:** Broken TV during delivery
+# - **Case Description:** The delivery person accidentally dropped the TV, resulting in damage. Requesting a replacement.
+# - **Call Reason:** escalate
 
 @app.route("/trigger-outbound-call", methods=["POST"])
 def trigger_outbound_call():
     data = {
         "from_number": "+8809677601357",
-        "to_number": "+8801862610315",
+        "to_number": "+8801852341413",
         "direction": "outbound",
-        "metadata": {
-            "call_type": "sales"
-        },
+        "override_ai_agent_id": OUT_ENG_AGENT_ID,
+        "metadata": {},
         "pia_llm_dynamic_data": {
-            "Case ID": "00001100",
-            "Case Status": "Product Fixed",
-            "Case Subject": "Broken TV during delivery",
-            "Case Description": "The delivery person accidentally dropped the TV, resulting in damage. Requesting a replacement.",
-            "Call Reason": "rating"
+            "case_id": "00001100",
+            "case_status": "Product Fixed",
+            "case_subject": "Broken TV during delivery",
+            "case_description": "The delivery person accidentally dropped the TV, resulting in damage. Requesting a replacement.",
+            "call_reason": "escalate"
         }
     }
 
@@ -489,7 +581,7 @@ def trigger_outbound_call():
         "Authorization": f"Bearer {AUTH_TOKEN}"
     }
     try:
-        response = requests.post('https://api.verbex.com/v1/calls/dial-outbound-phone-call', json=data, headers=headers)
+        response = requests.post('https://api.verbex.ai/v1/calls/dial-outbound-phone-call', json=data, headers=headers)
         response.raise_for_status()
         result = response.json()
     except requests.RequestException as e:
@@ -497,38 +589,15 @@ def trigger_outbound_call():
 
     return jsonify(result), 200
 
-# def scheduled_outbound_call():
-#     data = {
-#         "from_number": "+8809677601357",
-#         "to_number": "+8801862610315",
-#         "direction": "outbound",
-#         "metadata": {
-#             "call_type": "sales"
-#         },
-#         "pia_llm_dynamic_data": {
-#             "Case ID": "00001100",
-#             "Case Status": "Product Fixed",
-#             "Case Subject": "Broken TV during delivery",
-#             "Case Description": "The delivery person accidentally dropped the TV, resulting in damage. Requesting a replacement.",
-#             "Call Reason": "rating"
-#         }
-#     }
-
-#     headers = {
-#         "Content-Type": "application/json",
-#         "Authorization": f"Bearer {AUTH_TOKEN}"
-#     }
-#     try:
-#         response = requests.post('https://api.verbex.com/v1/calls/dial-outbound-phone-call', json=data, headers=headers)
-#         response.raise_for_status()
-#         result = response.json()
-#         print(f"Scheduled call result: {result}")
-#     except requests.RequestException as e:
-#         print(f"Scheduled call error: {e}")
-
 if __name__ == "__main__":
     scheduler = BackgroundScheduler()
-    scheduler.add_job(lambda: fetch_and_store_calls(log_auto=True), 'interval', minutes=SYNC_INTERVAL_MINUTES)
+    scheduler.add_job(lambda: fetch_and_store_calls(agent_id=IN_ENG_AGENT_ID, log_auto=True), 'interval', minutes=SYNC_INTERVAL_MINUTES)
+    scheduler.add_job(lambda: fetch_and_store_calls(agent_id=IN_BN_AGENT_ID, log_auto=True), 'interval', minutes=SYNC_INTERVAL_MINUTES)
+    
+    scheduler.add_job(lambda: fetch_and_store_calls(agent_id=OUT_ENG_AGENT_ID, log_auto=True), 'interval', minutes=SYNC_INTERVAL_MINUTES)
+    # scheduler.add_job(lambda: fetch_and_store_calls(agent_id=OUT_BN_AGENT_ID, log_auto=True), 'interval', minutes=SYNC_INTERVAL_MINUTES)
+
+    scheduler.add_job(lambda: fetch_salesforce_cases(log_auto=True), 'interval', minutes=SYNC_INTERVAL_MINUTES)
     # scheduler.add_job(scheduled_outbound_call, 'interval', minutes=SYNC_INTERVAL_MINUTES)
     scheduler.start()
 
