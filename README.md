@@ -137,6 +137,15 @@ The main purpose of this API is to:
     {"id":"...","success":true,"errors":[]}%  
     ```
 
+6. Setup the Cases Object in Salesforce (for Tickets)
+    - Go to **Sales Console** in Salesforce.
+    - Click on the downward arrow on the right of **Home** tab.
+    - Click on **Edit** and add **Cases** object. 
+    - Go to **Setup** in from the top right corner.
+    - Search for **Support Settings** in the Quick Find box.
+    - Click on **Support Settings**.
+    - ✅ Turn on **Show Closed Statuses in Case Status Field**.
+
 ## Setup & Installation
 
 ### 1. Clone the Repository
