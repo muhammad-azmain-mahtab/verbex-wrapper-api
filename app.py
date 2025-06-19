@@ -11,6 +11,8 @@ from apscheduler.schedulers.background import BackgroundScheduler
 import os
 from dotenv import load_dotenv
 import re
+from datetime import datetime, timezone, timedelta
+import time
 
 load_dotenv()
 app = Flask(__name__)
@@ -25,6 +27,7 @@ IN_ENG_AGENT_ID = os.getenv("IN_ENG_AGENT_ID")
 IN_BN_AGENT_ID = os.getenv("IN_BN_AGENT_ID")
 OUT_ENG_AGENT_ID = os.getenv("OUT_ENG_AGENT_ID")
 OUT_BN_AGENT_ID = os.getenv("OUT_BN_AGENT_ID")
+OUT_ENG_AGENT_PHONE_NUMBER = os.getenv("OUT_ENG_AGENT_PHONE_NUMBER")
 AUTH_TOKEN = os.getenv("AUTH_TOKEN")
 
 # Database Configuration
@@ -536,43 +539,31 @@ def fetch_salesforce_cases():
     except requests.exceptions.RequestException as e:
         return jsonify({"error": str(e)}), 500
 
-@app.route("/sync-calls-tickets", methods=["GET"])
-def sync_calls_endpoint():
-    calls_in_eng = fetch_and_store_calls(agent_id=IN_ENG_AGENT_ID)
-    calls_in_bn = fetch_and_store_calls(agent_id=IN_BN_AGENT_ID)
-    calls_out_eng = fetch_and_store_calls(agent_id=OUT_ENG_AGENT_ID)
-    # calls_out_bn = fetch_and_store_calls_out(agent_id=OUT_BN_AGENT_ID)
-    cases = fetch_salesforce_cases()
-    return jsonify({
-        "calls_in_eng": calls_in_eng,
-        "calls_in_bn": calls_in_bn, 
-        "calls_out_eng": calls_out_eng, 
-        # "calls_out_bn": calls_out_bn,  
-        "cases": cases
-        }), 200
+# reason = case_category = category of ticket = Service, Complaint, Delivery
+# type = case_status = service info = Product Fixed, Product Not Fixed.
 
-# PRIOR KNOWLEDGE
-# - **Phone Number:** 01852341413
-# - **Case ID:** 00001100
-# - **Case Status:** Product Fixed
-# - **Case Subject:** Broken TV during delivery
-# - **Case Description:** The delivery person accidentally dropped the TV, resulting in damage. Requesting a replacement.
-# - **Call Reason:** escalate
-
+# Endpoint to trigger outbound call manually
 @app.route("/trigger-outbound-call", methods=["POST"])
-def trigger_outbound_call():
+def trigger_outbound_call(to_number= "+8801852341413",
+                          case_id = "00001100", 
+                          case_status = "Product Fixed", 
+                          case_subject = "Broken TV during delivery", 
+                          case_description = "The delivery person accidentally dropped the TV, resulting in damage. Requesting a replacement.", 
+                          call_reason = "escalate",
+                          case_category = "Service"):    
     data = {
-        "from_number": "+8809677601357",
-        "to_number": "+8801852341413",
+        "from_number": OUT_ENG_AGENT_PHONE_NUMBER,
+        "to_number": to_number,
         "direction": "outbound",
         "override_ai_agent_id": OUT_ENG_AGENT_ID,
         "metadata": {},
         "pia_llm_dynamic_data": {
-            "case_id": "00001100",
-            "case_status": "Product Fixed",
-            "case_subject": "Broken TV during delivery",
-            "case_description": "The delivery person accidentally dropped the TV, resulting in damage. Requesting a replacement.",
-            "call_reason": "escalate"
+            "case_id": case_id,
+            "case_status": case_status,
+            "case_subject": case_subject,
+            "case_description": case_description,
+            "call_reason": call_reason,
+            "case_category": case_category
         }
     }
 
@@ -587,7 +578,138 @@ def trigger_outbound_call():
     except requests.RequestException as e:
         return jsonify({"error": str(e)}), 500
 
-    return jsonify(result), 200
+    return result
+
+def scheduled_outbound_call():
+    access_token = get_salesforce_token()
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json"
+    }
+
+    soql = f"""
+        SELECT Id, CaseNumber, Subject, Description, Status, Priority, CreatedDate, ClosedDate, Type, Reason, Account.Name, Account.Phone
+        FROM Case
+        WHERE Owner.Username = '{SALESFORCE_USERNAME}'
+    """
+
+    encoded_query = quote_plus(soql)
+    query_url = f"{SALESFORCE_INSTANCE_URL}/services/data/v59.0/query?q={encoded_query}"
+
+    try:
+        response = requests.get(query_url, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+        records = data.get("records", [])
+        case = records[0]
+
+        now = datetime.now(timezone.utc)
+        # Salesforce datetime format
+        sf_dt_format = "%Y-%m-%dT%H:%M:%S.%f%z"
+
+        if not records:
+            print("No cases found for outbound call.")
+            return
+        
+        responses = [] 
+
+        for case in records:
+            if case["Status"] == "Closed":
+                yesterday = now - timedelta(days=1)
+                closed_dt = datetime.strptime(case["ClosedDate"], sf_dt_format)
+                if closed_dt.date() == yesterday.date():
+                    print(f"🕒 Case {case['CaseNumber']} was closed yesterday.")
+                    print(f"Triggering outbound call to {account_phone} for case: {case_number} ({case_id}) with subject: '{subject}' and description: '{description}' and status: {case_type} and category: {case_category}.")
+
+                    call_response = trigger_outbound_call(to_number=account_phone,
+                                        case_id=case_id,
+                                        case_status=case_type,
+                                        case_subject=subject,
+                                        case_description=description,
+                                        call_reason="rating",
+                                        case_category=case_category)
+                    
+                    responses.append(call_response)
+                
+                    #🕒 Wait for 10 minutes (600 seconds) before next call
+                    print("Waiting 10 minutes before next call...")
+                    time.sleep(600)
+
+            else:
+                created_dt = datetime.strptime(case["CreatedDate"], sf_dt_format)
+                delta = now - created_dt
+
+                if delta.days >= 1:
+                    account_phone = case.get("Account", {}).get("Phone", "")
+                    case_id = case["Id"]
+                    case_number = case["CaseNumber"]
+                    subject = case["Subject"]
+                    description = case["Description"]
+                    case_type = case.get("Type")
+                    case_category = case.get("Reason")
+
+                    # Update case status to 'Escalated'
+                    update_url = f"{SALESFORCE_INSTANCE_URL}/services/data/v59.0/sobjects/Case/{case_id}"
+                    update_payload = {
+                        "Status": "Escalated",
+                        "Priority": "High"
+                    }
+                    update_headers = {
+                        "Authorization": f"Bearer {access_token}",
+                        "Content-Type": "application/json"
+                    }
+
+                    response = requests.patch(update_url, headers=update_headers, json=update_payload)
+                    response.raise_for_status()
+
+                    print(f"✅ Updated case {case_number} ({case_id}) to Status='Escalated' and Priority='High'")
+                    print(f"Triggering outbound call to {account_phone} for case: {case_number} ({case_id}) with subject: '{subject}' and description: '{description}' and status: {case_type} and category: {case_category}.")
+
+                    call_response = trigger_outbound_call(to_number=account_phone,
+                                        case_id=case_id,
+                                        case_status=case_type,
+                                        case_subject=subject,
+                                        case_description=description,
+                                        call_reason="escalate",
+                                        case_category=case_category)
+                    
+                    responses.append(call_response)
+                
+                    #🕒 Wait for 10 minutes (600 seconds) before next call
+                    print("Waiting 10 minutes before next call...")
+                    time.sleep(600)
+
+    except requests.exceptions.RequestException as e:
+        print(f"[ERROR] Failed to fetch cases for outbound call: {str(e)}")
+
+    return jsonify({
+        "calls_triggered": len(responses),
+        "details": responses
+    }), 200
+
+# Endpoint to trigger scheduled outbound call manually
+@app.route("/scheduled-outbound-call", methods=["GET"])
+def scheduled_outbound_call_endpoint():
+    try:
+        result = scheduled_outbound_call()
+        return result
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    
+@app.route("/sync-calls-tickets", methods=["GET"])
+def sync_calls_endpoint():
+    calls_in_eng = fetch_and_store_calls(agent_id=IN_ENG_AGENT_ID)
+    calls_in_bn = fetch_and_store_calls(agent_id=IN_BN_AGENT_ID)
+    calls_out_eng = fetch_and_store_calls(agent_id=OUT_ENG_AGENT_ID)
+    # calls_out_bn = fetch_and_store_calls_out(agent_id=OUT_BN_AGENT_ID)
+    cases = fetch_salesforce_cases()
+    return jsonify({
+        "calls_in_eng": calls_in_eng,
+        "calls_in_bn": calls_in_bn, 
+        "calls_out_eng": calls_out_eng, 
+        # "calls_out_bn": calls_out_bn,  
+        "cases": cases
+        }), 200
 
 if __name__ == "__main__":
     scheduler = BackgroundScheduler()
