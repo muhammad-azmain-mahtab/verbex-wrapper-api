@@ -146,6 +146,130 @@ The main purpose of this API is to:
     - Click on **Support Settings**.
     - ✅ Turn on **Show Closed Statuses in Case Status Field**.
 
+### 📘 Salesforce Case Trigger Integration with Verbex Wrapper API
+
+This guide helps you set up a Salesforce **Apex Trigger** that sends Case data to an external API (`{VERBEX_WRAPPER_API_URL}/trigger-obd-closed-case`) when a Case is **closed**.
+
+---
+
+#### ✅ Features
+
+- Detects when a Case status changes to `"Closed"`
+- Sends JSON data via HTTP POST to your API
+- Includes important Case and Account fields
+
+---
+
+#### 📦 JSON Fields Sent to API
+
+| Field          | Description                       |
+|----------------|-----------------------------------|
+| `id`           | Salesforce Case ID                |
+| `caseNumber`   | Case Number (e.g., "00012345")    |
+| `subject`      | Case Subject                      |
+| `description`  | Case Description                  |
+| `status`       | Will always be `"Closed"`         |
+| `priority`     | Priority level                    |
+| `createdDate`  | Case creation time                |
+| `closedDate`   | Case closure time                 |
+| `type`         | Case type                         |
+| `reason`       | Reason for case                   |
+| `accountName`  | Name of related Account           |
+| `accountPhone` | Phone number of the Account       |
+
+---
+
+#### 🔧 Setup Instructions
+
+##### 1. 🔐 Add Remote Site Setting
+
+1. In Salesforce, go to **Setup → Remote Site Settings**
+2. Click **New Remote Site**
+   - **Remote Site Name:** `VerbexAPI`
+   - **Remote Site URL:** `{VERBEX_WRAPPER_API_URL}`
+   - Click **Save**
+
+---
+
+##### 2. 🧠 Create Apex Class: `CaseAPIHandler`
+
+In Developer Console:
+
+1. Go to `File → New → Apex Class`
+2. Name it `CaseAPIHandler`
+3. Paste:
+
+    ```apex
+    public class CaseAPIHandler {
+
+        @future(callout=true)
+        public static void sendCaseData(Id caseId) {
+            try {
+                Case c = [
+                    SELECT 
+                        Id, CaseNumber, Subject, Description, Status, Priority,
+                        CreatedDate, ClosedDate, Type, Reason,
+                        Account.Name, Account.Phone
+                    FROM Case 
+                    WHERE Id = :caseId
+                    LIMIT 1
+                ];
+
+                Map<String, Object> data = new Map<String, Object>{
+                    'id' => c.Id,
+                    'caseNumber' => c.CaseNumber,
+                    'subject' => c.Subject,
+                    'description' => c.Description,
+                    'status' => c.Status,
+                    'priority' => c.Priority,
+                    'createdDate' => String.valueOf(c.CreatedDate),
+                    'closedDate' => String.valueOf(c.ClosedDate),
+                    'type' => c.Type,
+                    'reason' => c.Reason,
+                    'accountName' => c.Account != null ? c.Account.Name : null,
+                    'accountPhone' => c.Account != null ? c.Account.Phone : null
+                };
+
+                String jsonPayload = JSON.serialize(data);
+
+                HttpRequest req = new HttpRequest();
+                req.setEndpoint('{VERBEX_WRAPPER_API_URL}/trigger-obd-closed-case');
+                req.setMethod('POST');
+                req.setHeader('Content-Type', 'application/json');
+                req.setBody(jsonPayload);
+
+                Http http = new Http();
+                HttpResponse res = http.send(req);
+
+                System.debug('API Response: ' + res.getBody());
+            } catch (Exception e) {
+                System.debug('Callout error: ' + e.getMessage());
+            }
+        }
+    }
+    ```
+
+---
+
+##### 3. ⚙️ Create Trigger: `CaseTrigger`
+
+1. Go to `File → New → Apex Trigger`
+2. Name: `CaseTrigger`
+3. SObject: `Case`
+4. Paste:
+
+    ```apex
+    trigger CaseTrigger on Case (after update) {
+        for (Case c : Trigger.new) {
+            Case oldCase = Trigger.oldMap.get(c.Id);
+            if (c.Status == 'Closed') {
+                CaseAPIHandler.sendCaseData(c.Id);
+            }
+        }
+    }
+    ```
+
+
 ## Setup & Installation
 
 ### 1. Clone the Repository
@@ -166,16 +290,19 @@ MAGENTO_USERNAME=""
 MAGENTO_PASSWORD=""
 
 # Verbex AI Agent Configuration
-AI_AGENT_ID=""
+IN_ENG_AGENT_ID=""
+IN_BN_AGENT_ID=""
+OUT_ENG_AGENT_ID=""
+OUT_ENG_AGENT_PHONE_NUMBER=""
+OUT_BN_AGENT_ID=""
 AUTH_TOKEN=""
 
 # Database Configuration
-# Example: "postgresql+psycopg2://verbex:verbex@192.168.12.163:5432/verbex_db"
 DB_URI=""
 
 # Salesforce Configuration
-SALESFORCE_CLIENT_ID=""
-SALESFORCE_CLIENT_SECRET=""
+SALESFORCE_CONSUMER_ID=""
+SALESFORCE_CONSUMER_SECRET=""
 SALESFORCE_USERNAME=""
 SALESFORCE_PASSWORD=""
 SALESFORCE_INSTANCE_URL=""
