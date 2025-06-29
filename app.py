@@ -318,7 +318,7 @@ def get_case_info():
         soql = f"""
             SELECT Id, CaseNumber, Subject, Description, Status,
                    Priority, AccountId, CreatedDate, ClosedDate,
-                   Type, Reason
+                   Type, Reason, Customer_Note__c
             FROM Case
             WHERE CaseNumber = '{case_number}'
         """
@@ -546,7 +546,8 @@ def trigger_outbound_call(to_number= "+8801852341413",
                           case_subject = "Broken TV during delivery", 
                           case_description = "The delivery person accidentally dropped the TV, resulting in damage. Requesting a replacement.", 
                           call_reason = "escalate",
-                          case_category = "Service"):    
+                          case_category = "Service",
+                          case_created = "2025-06-18T04:51:06.000+0000"): 
     data = {
         "from_number": OUT_ENG_AGENT_PHONE_NUMBER,
         "to_number": to_number,
@@ -559,7 +560,8 @@ def trigger_outbound_call(to_number= "+8801852341413",
             "case_subject": case_subject,
             "case_description": case_description,
             "call_reason": call_reason,
-            "case_category": case_category
+            "case_category": case_category,
+            "case_created": case_created
         }
     }
 
@@ -570,11 +572,9 @@ def trigger_outbound_call(to_number= "+8801852341413",
     try:
         response = requests.post('https://api.verbex.ai/v1/calls/dial-outbound-phone-call', json=data, headers=headers)
         response.raise_for_status()
-        result = response.json()
+        return response.json()
     except requests.RequestException as e:
-        return jsonify({"error": str(e)}), 500
-
-    return result
+        return {"error": str(e)}
 
 def scheduled_outbound_call():
     access_token = get_salesforce_token()
@@ -621,6 +621,7 @@ def scheduled_outbound_call():
                 description = case["Description"]
                 case_type = case.get("Type")
                 case_category = case.get("Reason")
+                case_created = case["CreatedDate"]
 
                 # Update case status to 'Escalated'
                 update_url = f"{SALESFORCE_INSTANCE_URL}/services/data/v59.0/sobjects/Case/{case_id}"
@@ -637,7 +638,7 @@ def scheduled_outbound_call():
                 response.raise_for_status()
 
                 print(f"✅ Updated case {case_number} ({case_id}) to Status='Escalated' and Priority='High'")
-                print(f"Triggering outbound call to {account_phone} for case: {case_number} ({case_id}) with subject: '{subject}' and description: '{description}' and status: {case_type} and category: {case_category}.")
+                print(f"Triggering outbound call to {account_phone} for case: {case_number} ({case_id}) with subject: '{subject}' and description: '{description}' and status: {case_type} and category: {case_category} and case date: {case_created}.")
 
                 call_response = trigger_outbound_call(to_number=account_phone,
                                     case_id=case_id,
@@ -645,7 +646,8 @@ def scheduled_outbound_call():
                                     case_subject=subject,
                                     case_description=description,
                                     call_reason="escalate",
-                                    case_category=case_category)
+                                    case_category=case_category,
+                                    case_created=case_created)
                 
                 responses.append(call_response)
             
@@ -661,12 +663,70 @@ def scheduled_outbound_call():
         "details": responses
     }), 200
 
+def scheduled_callback_call():
+    try:
+        engine = create_engine(DB_URI)
+        
+        # Fetch callbacks that haven't been made yet
+        with engine.connect() as connection:
+            query = "SELECT * FROM to_callback WHERE called_again = FALSE"
+            callbacks_df = pd.read_sql(query, connection)
+
+        if callbacks_df.empty:
+            print("No pending callbacks.")
+            return
+
+        responses = []
+
+        for index, row in callbacks_df.iterrows():
+            print(f"Triggering callback for call_id: {row['call_id']}")
+
+            call_response = trigger_outbound_call(
+                to_number=row["to_number"],
+                case_id=row["case_id"],
+                case_status=row["case_status"],
+                case_subject=row["case_subject"],
+                case_description=row["case_description"],
+                call_reason=row["call_reason"],
+                case_category=row["case_category"],
+                case_created=row["case_created"]
+            )
+            responses.append(call_response)
+
+            if "error" not in call_response:
+                # Update the record to mark as called
+                with engine.connect() as connection:
+                    from sqlalchemy import text
+                    update_query = text("UPDATE to_callback SET called_again = TRUE WHERE call_id = :call_id")
+                    connection.execute(update_query, {"call_id": row['call_id']})
+                    connection.commit()
+                print(f"✅ Marked callback as completed for call_id: {row['call_id']}")
+            else:
+                print(f"[ERROR] Failed to trigger callback for call_id {row['call_id']}: {call_response.get('error')}")
+            
+            # Wait before processing the next callback
+            print("Waiting 1 minute before next callback...")
+            time.sleep(60)
+
+        print(f"Scheduled callback check finished. Triggered {len(responses)} calls.")
+
+    except Exception as e:
+        print(f"[ERROR] in scheduled_callback_call: {str(e)}")
+
 # Endpoint to trigger scheduled outbound call manually
 @app.route("/scheduled-outbound-call", methods=["GET"])
 def scheduled_outbound_call_endpoint():
     try:
         result = scheduled_outbound_call()
         return result
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    
+@app.route("/scheduled-callback-call", methods=["GET"])
+def scheduled_callback_call_endpoint():
+    try:
+        scheduled_callback_call()
+        return jsonify({"message": "Callback check completed"}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     
@@ -685,40 +745,76 @@ def sync_calls_endpoint():
         "cases": cases
         }), 200
 
-@app.route('/trigger-obd-closed-case', methods=['POST'])
+
+@app.route("/trigger-obd-closed-case", methods=["POST"])
 def trigger_obd_closed_case():
     try:
         case = request.get_json()
 
-        # status = case.get('status')
-        # priority = case.get('priority')
-        # created_date = case.get('createdDate')
-        # closed_date = case.get('closedDate')
-        
-        account_name = case.get('accountName')
         account_phone = case.get('accountPhone')
-        case_id = case["id"]
-        case_number = case["caseNumber"]
-        subject = case["subject"]
-        description = case["description"]
+        case_id = case.get('id')
+        case_number = case.get('caseNumber')
+        subject = case.get('subject')
+        description = case.get('description')
         case_type = case.get("type")
         case_category = case.get('reason')
 
-        print(f"Triggering outbound call to {account_phone} for case: {case_number} ({case_id}) with subject: '{subject}' and description: '{description}' and status: {case_type} and category: {case_category}.")
+        print(f"Triggering outbound call to {account_phone} for case: {case_number} ({case_id}) "
+              f"with subject: '{subject}' and description: '{description}' and status: {case_type} "
+              f"and category: {case_category}.")
 
-        call_response = trigger_outbound_call(to_number=account_phone,
-                            case_id=case_id,
-                            case_status=case_type,
-                            case_subject=subject,
-                            case_description=description,
-                            call_reason="rating",
-                            case_category=case_category)
-    
-        return jsonify({call_response}), 200
+        call_response = trigger_outbound_call(
+            to_number=account_phone,
+            case_id=case_id,
+            case_status=case_type,
+            case_subject=subject,
+            case_description=description,
+            call_reason="rating",
+            case_category=case_category
+        )
+        if "error" in call_response:
+            print(f"Call failed: {call_response['error']}")
+            return jsonify(call_response), 500
+
+        print(f"Call response: {call_response}")
+        return jsonify({"message": "success", "call_response": call_response}), 200
 
     except Exception as e:
-        print("❌ Error:", e)
-        return jsonify({"message": "Error receiving case", "error": str(e)}), 500
+        print(f"Unexpected error: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/log-callback", methods=["POST"])
+@log_request_input("/log-callback")
+def log_callback():
+    data = request.json
+
+    try:
+        record = {
+            "to_number": data["to_number"],
+            "case_id": data["case_id"],
+            "case_status": data["case_status"],
+            "case_subject": data["case_subject"],
+            "case_description": data["case_description"],
+            "call_reason": data["call_reason"],
+            "case_category": data["case_category"],
+            "call_id": data["call_id"],
+            "called_again": False,
+            "preferred_time": data["preferred_time"],
+            "logged_at": data["logged_at"],
+            "case_created": data["case_created"]
+        }
+
+        df = pd.DataFrame([record])
+
+        engine = create_engine(DB_URI)
+                
+        # Save to DB
+        df.to_sql("to_callback", engine, if_exists="append", index=False)
+
+        return jsonify({"message": "Callback logged successfully"}), 201
+
+    except Exception as e:
+        return jsonify({"error": f"Failed to log callback: {str(e)}"}), 500
 
 if __name__ == "__main__":
     scheduler = BackgroundScheduler()
@@ -730,6 +826,7 @@ if __name__ == "__main__":
 
     scheduler.add_job(lambda: fetch_salesforce_cases(), 'interval', minutes=SYNC_INTERVAL_MINUTES)
     # scheduler.add_job(scheduled_outbound_call, 'interval', minutes=SYNC_INTERVAL_MINUTES)
+    # scheduler.add_job(scheduled_callback_call, 'interval', minutes=SYNC_INTERVAL_MINUTES)
     scheduler.start()
 
     app.run(host = '0.0.0.0', port = 4288, debug=True)

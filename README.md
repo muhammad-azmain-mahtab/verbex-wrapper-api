@@ -148,36 +148,36 @@ The main purpose of this API is to:
 
 ### 📘 Salesforce Case Trigger Integration with Verbex Wrapper API
 
-This guide helps you set up a Salesforce **Apex Trigger** that sends Case data to an external API (`{VERBEX_WRAPPER_API_URL}/trigger-obd-closed-case`) when a Case is **closed**.
+  This guide helps you set up a Salesforce **Apex Trigger** that sends Case data to an external API (`{VERBEX_WRAPPER_API_URL}/trigger-obd-closed-case`) when a Case is **closed**.
 
----
+  ---
 
-#### ✅ Features
+  #### ✅ Features
 
-- Detects when a Case status changes to `"Closed"`
-- Sends JSON data via HTTP POST to your API
-- Includes important Case and Account fields
+  - Detects when a Case status changes to `"Closed"`
+  - Sends JSON data via HTTP POST to your API
+  - Includes important Case and Account fields
 
----
+  ---
 
-#### 📦 JSON Fields Sent to API
+  #### 📦 JSON Fields Sent to API
 
-| Field          | Description                       |
-|----------------|-----------------------------------|
-| `id`           | Salesforce Case ID                |
-| `caseNumber`   | Case Number (e.g., "00012345")    |
-| `subject`      | Case Subject                      |
-| `description`  | Case Description                  |
-| `status`       | Will always be `"Closed"`         |
-| `priority`     | Priority level                    |
-| `createdDate`  | Case creation time                |
-| `closedDate`   | Case closure time                 |
-| `type`         | Case type                         |
-| `reason`       | Reason for case                   |
-| `accountName`  | Name of related Account           |
-| `accountPhone` | Phone number of the Account       |
+  | Field          | Description                       |
+  |----------------|-----------------------------------|
+  | `id`           | Salesforce Case ID                |
+  | `caseNumber`   | Case Number (e.g., "00012345")    |
+  | `subject`      | Case Subject                      |
+  | `description`  | Case Description                  |
+  | `status`       | Will always be `"Closed"`         |
+  | `priority`     | Priority level                    |
+  | `createdDate`  | Case creation time                |
+  | `closedDate`   | Case closure time                 |
+  | `type`         | Case type                         |
+  | `reason`       | Reason for case                   |
+  | `accountName`  | Name of related Account           |
+  | `accountPhone` | Phone number of the Account       |
 
----
+  ---
 
 #### 🔧 Setup Instructions
 
