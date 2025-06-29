@@ -25,21 +25,27 @@ The main purpose of this API is to:
 
 ### <img src="https://cdn.jsdelivr.net/gh/devicons/devicon/icons/magento/magento-original.svg" alt="Magento" width="24" height="24" style="vertical-align:middle;margin-right:4px;"> Magento Setup
 
-1. **Create Magento Directory**
+1. **Create Magento Access Keys**
+    - Go to [https://commercemarketplace.adobe.com/](https://commercemarketplace.adobe.com/) and open an account.
+    - Then go to "My Profile" > "Access Keys".
+    - Create a new access key.
+    - Store the public key (username) and private key (password) for future use.
+
+2. **Create Magento Directory**
     ```bash
     mkdir -p ~/Sites/magento
     cd ~/Sites/magento
     ```
 
-2. **Initialize Project with Docker Magento Template**
+3. **Initialize Project with Docker Magento Template**
     ```bash
     curl -s https://raw.githubusercontent.com/markshust/docker-magento/master/lib/template | bash
     ```
 
-3. **Overwrite Compose File**
+4. **Overwrite Compose File**
     - Overwrite the content of `compose.dev-linux.yaml` to `compose.dev.yaml`.
 
-4. **Modify Healthcheck for OpenSearch**
+5. **Modify Healthcheck for OpenSearch**
     - In `compose.healthcheck.yaml`, replace the `opensearch` section with:
       
       ```yaml
@@ -81,6 +87,8 @@ The main purpose of this API is to:
     ```bash
     bin/magento setup:upgrade
     ```
+
+> **Note:** If you enter the wrong username or password during the setup, you can edit them later by running `vi ~/.composer/auth.json`.
 
 ### <img src="https://cdn.jsdelivr.net/gh/devicons/devicon/icons/salesforce/salesforce-original.svg" alt="Salesforce" width="24" height="24" style="vertical-align:middle;margin-right:4px;"> Salesforce Setup
 
