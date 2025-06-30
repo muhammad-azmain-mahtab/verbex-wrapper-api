@@ -340,10 +340,15 @@ This command will build (if necessary) and start the API service in detached mod
 
 ## API Endpoints
 
+This section details all available API endpoints.
+
+---
+
 ### 1. Health Check
 
 **Endpoint:** `/`  
 **Method:** `GET`  
+**Description:** Checks if the API service is running.
 **Response Example:**
 ```json
 {
@@ -357,6 +362,7 @@ This command will build (if necessary) and start the API service in detached mod
 
 **Endpoint:** `/products`  
 **Method:** `POST`  
+**Description:** Searches for products in Magento by a keyword.
 **Request Body:**
 ```json
 {
@@ -383,6 +389,7 @@ This command will build (if necessary) and start the API service in detached mod
 
 **Endpoint:** `/salesforce-account`  
 **Method:** `POST`  
+**Description:** Retrieves a Salesforce account and their latest purchase information using a phone number.
 **Request Body:**
 ```json
 {
@@ -390,7 +397,6 @@ This command will build (if necessary) and start the API service in detached mod
 }
 ```
 **Response Example:**
-
 ```json
 {
     "Customer Name": "Customer",
@@ -407,10 +413,12 @@ This command will build (if necessary) and start the API service in detached mod
 
 **Endpoint:** `/create-salesforce-ticket`  
 **Method:** `POST`  
+**Description:** Creates a new Case (ticket) in Salesforce. If no account exists for the phone number, a new one is created.
 **Request Body:**
 ```json
 {
   "phone": "1234567890",
+  "customer_name": "New Customer",
   "subject": "Subject here",
   "description": "Ticket description",
   "type": "Type of case",
@@ -421,7 +429,7 @@ This command will build (if necessary) and start the API service in detached mod
 ```json
 {
   "message": "Case created successfully",
-  "case_id": "daw223da",
+  "case_id": "5005g000001ABCDE",
   "case_number": "00001001"
 }
 ```
@@ -432,6 +440,7 @@ This command will build (if necessary) and start the API service in detached mod
 
 **Endpoint:** `/get-case-info`  
 **Method:** `POST`  
+**Description:** Retrieves detailed information about a specific Salesforce Case using its case number.
 **Request Body:**
 ```json
 {
@@ -439,53 +448,151 @@ This command will build (if necessary) and start the API service in detached mod
 }
 ```
 **Response Example:**
-
 ```json
 {
-    "AccountId": "hafl23j11",
-    "CaseNumber": "00001050",
-    "ClosedDate": "2025-05-24T07:40:46.000+0000",
-    "CreatedDate": "2025-05-24T07:39:37.000+0000",
+    "AccountId": "0015g00001ABCDE",
+    "CaseNumber": "00001001",
+    "ClosedDate": null,
+    "CreatedDate": "2025-06-30T10:00:00.000+0000",
     "Description": "TV display broken.",
-    "Id": "daw223da",
+    "Id": "5005g00001ABCDE",
     "Priority": "Medium",
     "Reason": "Pending",
-    "Status": "Closed",
+    "Status": "New",
     "Subject": "TV Issue",
-    "Type": "Service",
-    "attributes": {
-        "type": "Case",
-        "url": "/services/data/v59.0/sobjects/Case/daw223da"
-    }
+    "Type": "Service"
 }
 ```
 
 ---
 
-### 6. Fetch Verbex Call Logs (Scheduled & Manual)
+### 6. Sync Call Logs & Tickets
 
-**Purpose:**  
-Fetches all call logs and related info from the Verbex internal API, used for visualization in PowerBI or similar tools.
+**Endpoint:** `/sync-calls-tickets`  
+**Method:** `GET`  
+**Description:** Manually triggers a full data synchronization. It fetches all call logs from all configured Verbex agents and all cases from Salesforce, then saves them to the database. This is the same job that runs on a schedule.
+**Response Example:**
+```json
+{
+    "calls_in_eng": { "status": "success", "calls_processed": 50, "messages_saved": 600, "analyses_saved": 10 },
+    "calls_in_bn": { "status": "success", "calls_processed": 45, "messages_saved": 550, "analyses_saved": 8 },
+    "calls_out_eng": { "status": "success", "calls_processed": 20, "messages_saved": 250, "analyses_saved": 5 },
+    "calls_out_bn": { "status": "success", "calls_processed": 15, "messages_saved": 200, "analyses_saved": 4 },
+    "cases": { "tickets_saved": 100 }
+}
+```
 
-- **Scheduled Fetch:**  
-  - Runs automatically every `SYNC_INTERVAL_MINUTES` (as set in `.env`).
-  - No user action required.
+---
 
-- **Manual Fetch Endpoint:**  
-  - **Endpoint:** `/fetch-call-logs`
-  - **Method:** `POST`
-  - **Description:** Triggers immediate fetching of call logs from Verbex internal API.
-  - **Request Body:** (empty)
-  - **Response Example:**
-    
-    ```json
-    {
-        "calls_processed": 55,
-        "messages_saved": 679,
-        "analyses_saved": 3,
-        "status": "success"
-    }
-    ```
+### 7. Trigger Outbound Call (Manual)
+
+**Endpoint:** `/trigger-outbound-call`  
+**Method:** `POST`  
+**Description:** Manually initiates an outbound call via the Verbex API with hardcoded test data. Primarily used for development and testing.
+**Request Body:** (empty)
+**Response Example:**
+```json
+{
+  "call_id": "call_abc123",
+  "status": "queued"
+}
+```
+
+---
+
+### 8. Trigger Outbound Call on Closed Case (Webhook)
+
+**Endpoint:** `/trigger-obd-closed-case`  
+**Method:** `POST`  
+**Description:** A webhook endpoint designed to be called by a Salesforce Apex Trigger when a Case is closed. It initiates an outbound call to the customer for a follow-up (e.g., a satisfaction survey).
+**Request Body (from Salesforce):**
+```json
+{
+  "id": "5005g00001ABCDE",
+  "caseNumber": "00012345",
+  "subject": "TV Issue",
+  "description": "TV display broken.",
+  "status": "Closed",
+  "type": "Service",
+  "reason": "Product Fixed",
+  "accountName": "Customer Name",
+  "accountPhone": "1234567890"
+}
+```
+**Response Example:**
+```json
+{
+  "message": "success",
+  "call_response": {
+    "call_id": "call_def456",
+    "status": "queued"
+  }
+}
+```
+
+---
+
+### 9. Log a Callback Request
+
+**Endpoint:** `/log-callback`  
+**Method:** `POST`  
+**Description:** Logs a customer's request for a callback. This is typically used by the Verbex agent when a user asks to be called back later. The information is saved to the database for a scheduled process to handle.
+**Request Body:**
+```json
+{
+    "to_number": "+1234567890",
+    "case_id": "5005g00001ABCDE",
+    "case_status": "New",
+    "case_subject": "Inquiry",
+    "case_description": "Customer wants to know about product X.",
+    "call_reason": "callback_request",
+    "case_category": "Inquiry",
+    "call_id": "call_ghi789",
+    "preferred_time": "Tomorrow morning",
+    "logged_at": "2025-06-30T11:00:00Z",
+    "case_created": "2025-06-30T10:55:00Z"
+}
+```
+**Response Example:**
+```json
+{
+  "message": "Callback logged successfully"
+}
+```
+
+---
+
+### 10. Trigger Scheduled Outbound Calls (Manual)
+
+**Endpoint:** `/scheduled-outbound-call`  
+**Method:** `GET`  
+**Description:** Manually triggers the job that checks for open Salesforce cases older than a day and initiates an escalation call.
+**Response Example:**
+```json
+{
+    "calls_triggered": 1,
+    "details": [
+        {
+            "call_id": "call_jkl012",
+            "status": "queued"
+        }
+    ]
+}
+```
+
+---
+
+### 11. Trigger Scheduled Callback Calls (Manual)
+
+**Endpoint:** `/scheduled-callback-call`  
+**Method:** `GET`  
+**Description:** Manually triggers the job that processes pending callback requests from the database.
+**Response Example:**
+```json
+{
+  "message": "Callback check completed"
+}
+```
 
 ---
 
