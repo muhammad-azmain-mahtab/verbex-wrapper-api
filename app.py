@@ -307,6 +307,9 @@ def get_case_info():
     if not case_number:
         return jsonify({"error": "Missing 'case_number' in request body"}), 400
 
+    if len(case_number) < 8:
+        case_number = case_number.zfill(8)
+
     try:
         access_token = get_salesforce_token()
         headers = {
@@ -345,6 +348,7 @@ def fetch_and_store_calls(agent_id=IN_ENG_AGENT_ID, log_auto=False):
 
         calls_url = f"https://api.verbex.ai/v1/calls/?ai_agent_ids={agent_id}&page_size=1000"
         calls_response = requests.get(calls_url, headers=headers)
+        print(calls_response)
         calls_data = calls_response.json()
         calls = calls_data.get('calls', [])
 
@@ -542,12 +546,23 @@ def fetch_salesforce_cases():
 @app.route("/trigger-outbound-call", methods=["POST"])
 def trigger_outbound_call(to_number= "+8801852341413",
                           case_id = "00001100", 
-                          case_status = "Product Fixed", 
+                          case_status = "Fixed", 
                           case_subject = "Broken TV during delivery", 
                           case_description = "The delivery person accidentally dropped the TV, resulting in damage. Requesting a replacement.", 
                           call_reason = "escalate",
                           case_category = "Service",
-                          case_created = "2025-06-18T04:51:06.000+0000"): 
+                          case_created = "2025-06-18T04:51:06.000+0000",
+                          customer_note = "TV bulbs fixed inside panel, replaced with new ones."): 
+
+    if case_category == "Service" and case_status == "Fixed":
+        case_status = "Product Fixed"
+    elif case_category == "Service" and case_status == "Not Fixed":
+        case_status = "Product Not Fixed"
+    elif case_category == "Complaint" and case_status == "Fixed":
+        case_status = "Complaint Handled"
+    elif case_category == "Complaint" and case_status == "Not Fixed":
+        case_status = "Complaint Not Handled"
+
     data = {
         "from_number": OUT_ENG_AGENT_PHONE_NUMBER,
         "to_number": to_number,
@@ -561,7 +576,8 @@ def trigger_outbound_call(to_number= "+8801852341413",
             "case_description": case_description,
             "call_reason": call_reason,
             "case_category": case_category,
-            "case_created": case_created
+            "case_created": case_created,
+            "customer_note": customer_note
         }
     }
 
@@ -747,6 +763,7 @@ def sync_calls_endpoint():
 
 
 @app.route("/trigger-obd-closed-case", methods=["POST"])
+@log_request_input("/trigger-obd-closed-case")
 def trigger_obd_closed_case():
     try:
         case = request.get_json()
