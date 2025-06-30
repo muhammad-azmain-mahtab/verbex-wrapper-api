@@ -1,20 +1,33 @@
 # Verbex Wrapper API
 
-This repository provides an API wrapper to handle tool calls for the [Verbex AI Voice Agent](https://verbex.ai/). It acts as a middleware to facilitate communication between the Verbex agent and third-party APIs such as Magento and Salesforce.
+This repository provides an API wrapper to handle tool calls for the [Verbex AI Voice Agent](https://verbex.ai/). It acts as a middleware to facilitate communication between the Verbex agent and third-party services like Magento and Salesforce.
 
 ## Purpose
 
 The main purpose of this API is to:
 - Receive tool call requests from the Verbex AI voice agent.
-- Interact with external APIs (Magento, Salesforce) as required by the agent.
-- Process and return the responses to the Verbex agent.
+- Interact with external APIs (Magento, Salesforce) to fetch data or perform actions.
+- Process and return structured responses to the Verbex agent.
+- Automate workflows, such as triggering outbound calls based on Salesforce case updates.
+- Synchronize data from Verbex and Salesforce into a central database for analytics.
 
 ## Features
 
 - Handles authentication and session management for Magento and Salesforce.
 - Designed for easy integration with Verbex AI agent workflows.
-- Configurable via environment variables.
-- Includes scheduled and manual data sync for analytical dashboards.
+- **Magento Integration:** Search for products and check stock levels.
+- **Salesforce Integration:**
+    - Look up accounts and past purchases by phone number.
+    - Create and retrieve detailed information about support cases (tickets).
+    - Automatically create new accounts if one doesn't exist.
+- **Automated Outbound Calling:**
+    - **Webhook:** Trigger a follow-up call when a Salesforce case is closed.
+    - **Scheduled Escalation:** Automatically call customers for cases that have been open for more than a day.
+    - **Callback System:** Log and process customer requests for a callback at a later time.
+- **Data Synchronization:**
+    - Periodically fetches call logs (including messages and post-call analysis) from multiple Verbex agents.
+    - Fetches all Salesforce cases associated with the configured user.
+    - Saves all synchronized data to a PostgreSQL database for reporting and analytics (PowerBI).
 
 ## Prerequisites
 
@@ -294,8 +307,8 @@ Create a `.env` file in the root directory with the following content:
 ```env
 # Magento Configuration
 MAGENTO_BASE_URL=""
-MAGENTO_USERNAME=""
-MAGENTO_PASSWORD=""
+MAGENTO_USERNAME="john.smith" #default username for Magento
+MAGENTO_PASSWORD="password123" #default password for Magento
 
 # Verbex AI Agent Configuration
 IN_ENG_AGENT_ID=""
