@@ -1,17 +1,15 @@
 from flask import Flask, request, jsonify, make_response
-from requests_oauthlib import OAuth1
 import requests
 from urllib.parse import quote_plus
 from functools import wraps
 from sqlalchemy import create_engine
 from time import sleep
-import json
 import pandas as pd
 from apscheduler.schedulers.background import BackgroundScheduler
 import os
 from dotenv import load_dotenv
 import re
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 import time
 
 load_dotenv()
@@ -42,7 +40,7 @@ SALESFORCE_TOKEN_URL = os.getenv("SALESFORCE_TOKEN_URL")
 SALESFORCE_INSTANCE_URL = os.getenv("SALESFORCE_INSTANCE_URL")
 
 # APScheduler
-SYNC_INTERVAL_MINUTES = int(os.getenv("SYNC_INTERVAL_MINUTES", 1440)) # 24 Hours
+SYNC_INTERVAL_MINUTES = int(os.getenv("SYNC_INTERVAL_MINUTES")) 
 
 def log_request_input(endpoint_name):
     def decorator(func):
@@ -346,10 +344,22 @@ def fetch_and_store_calls(agent_id=IN_ENG_AGENT_ID, log_auto=False):
         headers = {'Authorization': f'Bearer {AUTH_TOKEN}'}
         engine = create_engine(DB_URI)
 
-        calls_url = f"https://api.verbex.ai/v1/calls/?ai_agent_ids={agent_id}&page_size=1000"
+        calls_url = f"https://api.verbex.ai/v1/calls?ai_agent_ids={agent_id}&page_size=100&sort_direction=desc"
         calls_response = requests.get(calls_url, headers=headers)
-        print(calls_response)
-        calls_data = calls_response.json()
+        if calls_response.status_code != 200:
+            print(f"[ERROR] Failed to fetch calls: {calls_response.status_code} {calls_response.text}")
+            return {
+                "status": "error",
+                "error": f"Failed to fetch calls: {calls_response.status_code} {calls_response.text}"
+            }
+        try:
+            calls_data = calls_response.json()
+        except Exception as e:
+            print(f"[ERROR] Could not parse JSON: {e} - Response: {calls_response.text}")
+            return {
+                "status": "error",
+                "error": f"Could not parse JSON: {e} - Response: {calls_response.text}"
+            }
         calls = calls_data.get('calls', [])
 
         all_messages = []
@@ -414,8 +424,6 @@ def fetch_and_store_calls(agent_id=IN_ENG_AGENT_ID, log_auto=False):
             try:
                 analysis_response = requests.get(analysis_url, headers=headers)
                 analysis_json = analysis_response.json()
-                if analysis_json.get('status') != 200:
-                    continue
 
                 items = analysis_json.get('data', {}).get('items', [])
                 if not items:
@@ -463,7 +471,6 @@ def fetch_and_store_calls(agent_id=IN_ENG_AGENT_ID, log_auto=False):
         else:
             mssg_table = "call_messages"
             anal_table = "call_analysis"
-        
 
         df_messages.to_sql(mssg_table, engine, if_exists="replace", index=False)
         df_analysis.to_sql(anal_table, engine, if_exists="replace", index=False)
