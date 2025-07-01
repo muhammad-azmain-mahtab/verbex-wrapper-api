@@ -782,10 +782,11 @@ def trigger_obd_closed_case():
         description = case.get('description')
         case_type = case.get("type")
         case_category = case.get('reason')
+        customer_note = case.get('customerNote')
 
         print(f"Triggering outbound call to {account_phone} for case: {case_number} ({case_id}) "
               f"with subject: '{subject}' and description: '{description}' and status: {case_type} "
-              f"and category: {case_category}.")
+              f"and category: {case_category} " f"and note: {customer_note}.")
 
         call_response = trigger_outbound_call(
             to_number=account_phone,
@@ -794,7 +795,8 @@ def trigger_obd_closed_case():
             case_subject=subject,
             case_description=description,
             call_reason="rating",
-            case_category=case_category
+            case_category=case_category,
+            customer_note=customer_note,
         )
         if "error" in call_response:
             print(f"Call failed: {call_response['error']}")

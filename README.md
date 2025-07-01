@@ -230,7 +230,8 @@ In Developer Console:
                     SELECT 
                         Id, CaseNumber, Subject, Description, Status, Priority,
                         CreatedDate, ClosedDate, Type, Reason,
-                        Account.Name, Account.Phone
+                        Account.Name, Account.Phone,
+                        Customer_Note__c
                     FROM Case 
                     WHERE Id = :caseId
                     LIMIT 1
@@ -248,13 +249,14 @@ In Developer Console:
                     'type' => c.Type,
                     'reason' => c.Reason,
                     'accountName' => c.Account != null ? c.Account.Name : null,
-                    'accountPhone' => c.Account != null ? c.Account.Phone : null
+                    'accountPhone' => c.Account != null ? c.Account.Phone : null,
+                    'customerNote' => c.Customer_Note__c
                 };
 
                 String jsonPayload = JSON.serialize(data);
 
                 HttpRequest req = new HttpRequest();
-                req.setEndpoint('{VERBEX_WRAPPER_API_URL}/trigger-obd-closed-case');
+                req.setEndpoint('https://verbex.dev-polygontech.xyz/trigger-obd-closed-case');
                 req.setMethod('POST');
                 req.setHeader('Content-Type', 'application/json');
                 req.setBody(jsonPayload);
