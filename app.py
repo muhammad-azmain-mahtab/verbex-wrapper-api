@@ -556,7 +556,7 @@ def trigger_outbound_call(to_number= "+8801852341413",
                           case_status = "Fixed", 
                           case_subject = "Broken TV during delivery", 
                           case_description = "The delivery person accidentally dropped the TV, resulting in damage. Requesting a replacement.", 
-                          call_reason = "escalate",
+                          call_reason = "rating",
                           case_category = "Service",
                           case_created = "2025-06-18T04:51:06.000+0000",
                           customer_note = "TV bulbs fixed inside panel, replaced with new ones."): 
@@ -834,13 +834,84 @@ def log_callback():
 
         engine = create_engine(DB_URI)
                 
-        # Save to DB
         df.to_sql("to_callback", engine, if_exists="append", index=False)
 
         return jsonify({"message": "Callback logged successfully"}), 201
 
     except Exception as e:
         return jsonify({"error": f"Failed to log callback: {str(e)}"}), 500
+
+@app.route("/store-rating-and-comments", methods=["POST"])
+@log_request_input("/store-rating-and-comments")
+def store_rating_and_comments():
+    """
+    Receives customer rating and comments and updates the corresponding Salesforce Case.
+    Expects JSON: {"case_number": "...", "rating": int, "comments": "..."}
+    """
+    data = request.get_json()
+    case_number = data.get("case_number")
+    rating = data.get("rating")
+    comments = data.get("comments")
+
+    if not case_number:
+        case_number = data.get("case_id")
+
+    if not all([case_number, rating is not None, comments is not None]):
+        return jsonify({"error": "Missing required fields: 'case_number' (or 'case_id'), 'rating', 'comments'"}), 400
+
+    try:
+        access_token = get_salesforce_token()
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json"
+        }
+
+        print(f"Querying for Salesforce ID with CaseNumber: {case_number}")
+        soql = f"SELECT Id FROM Case WHERE CaseNumber = '{case_number}'"
+        query_url = f"{SALESFORCE_INSTANCE_URL}/services/data/v59.0/query?q={quote_plus(soql)}"
+        
+        query_response = requests.get(query_url, headers=headers)
+        query_response.raise_for_status()
+        
+        records = query_response.json().get("records", [])
+        if not records:
+            return jsonify({"error": f"No case found with CaseNumber '{case_number}'."}), 404
+
+        case_id = records[0]['Id']
+        print(f"Found Salesforce ID: {case_id} for CaseNumber: {case_number}.")
+
+        payload = {
+            "Customer_Rating__c": rating,
+            "Customer_Feedback__c": comments
+        }
+
+        update_url = f"{SALESFORCE_INSTANCE_URL}/services/data/v59.0/sobjects/Case/{case_id}"
+        print(f"Patching record at URL: {update_url}")
+
+        response = requests.patch(update_url, headers=headers, json=payload)
+        
+        if response.status_code == 204:
+            print(f"Successfully updated Case {case_id} with rating ({rating}) and comments.")
+            return jsonify({
+                "message": f"Rating and comments updated successfully for case {case_number}"
+            }), 200
+        else:
+            response.raise_for_status() 
+
+    except requests.exceptions.HTTPError as http_err:
+        error_details = "No error details in response."
+        try:
+            error_details = http_err.response.json()
+        except ValueError:
+            error_details = http_err.response.text
+
+        print(f"Salesforce API error for CaseNumber {case_number}: {error_details}")
+        return jsonify({"error": "Failed to update Salesforce case.", "details": error_details}), http_err.response.status_code
+    
+    except Exception as e:
+        print(f"An unexpected error occurred while processing CaseNumber {case_number}: {str(e)}")
+        return jsonify({"error": f"An unexpected error occurred: {str(e)}"}), 500
+    
 
 if __name__ == "__main__":
     scheduler = BackgroundScheduler()
