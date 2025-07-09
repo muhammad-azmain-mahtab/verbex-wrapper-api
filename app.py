@@ -11,9 +11,13 @@ from dotenv import load_dotenv
 import re
 from datetime import datetime, timezone
 import time
+import threading
+import uuid
 
 load_dotenv()
 app = Flask(__name__)
+
+background_tasks = {}
 
 # Magento Configuration
 MAGENTO_BASE_URL = os.getenv("MAGENTO_BASE_URL")
@@ -752,22 +756,64 @@ def scheduled_callback_call_endpoint():
         return jsonify({"message": "Callback check completed"}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-    
+
+def run_sync_in_background(task_id):
+    """A helper function to run all the time-consuming sync tasks in the background."""
+    print(f"Starting background sync for task_id: {task_id}")
+    background_tasks[task_id] = {"status": "running", "result": None}
+    try:
+        calls_in_eng = fetch_and_store_calls(agent_id=IN_ENG_AGENT_ID, log_auto=True)
+        calls_in_bn = fetch_and_store_calls(agent_id=IN_BN_AGENT_ID, log_auto=True)
+        calls_out_eng = fetch_and_store_calls(agent_id=OUT_ENG_AGENT_ID, log_auto=True)
+        calls_out_bn = fetch_and_store_calls(agent_id=OUT_BN_AGENT_ID, log_auto=True)
+        cases = fetch_salesforce_cases()
+
+        result = {
+            "calls_in_eng": calls_in_eng,
+            "calls_in_bn": calls_in_bn,
+            "calls_out_eng": calls_out_eng,
+            "calls_out_bn": calls_out_bn,
+            "cases": cases
+        }
+        background_tasks[task_id] = {"status": "completed", "result": result}
+        print(f"Background sync completed for task_id: {task_id}")
+
+    except Exception as e:
+        print(f"[ERROR] Background sync failed for task_id: {task_id}. Error: {str(e)}")
+        background_tasks[task_id] = {"status": "failed", "result": str(e)}
+
 @app.route("/sync-calls-tickets", methods=["GET"])
 def sync_calls_endpoint():
-    calls_in_eng = fetch_and_store_calls(agent_id=IN_ENG_AGENT_ID)
-    calls_in_bn = fetch_and_store_calls(agent_id=IN_BN_AGENT_ID)
-    calls_out_eng = fetch_and_store_calls(agent_id=OUT_ENG_AGENT_ID)
-    calls_out_bn = fetch_and_store_calls(agent_id=OUT_BN_AGENT_ID)
-    cases = fetch_salesforce_cases()
-    return jsonify({
-        "calls_in_eng": calls_in_eng,
-        "calls_in_bn": calls_in_bn, 
-        "calls_out_eng": calls_out_eng, 
-        "calls_out_bn": calls_out_bn,  
-        "cases": cases
-        }), 200
+    """
+    Triggers the synchronization of calls and tickets in a background thread
+    and returns a task ID to check the status.
+    """
+    task_id = str(uuid.uuid4())
+    thread = threading.Thread(target=run_sync_in_background, args=(task_id,))
+    thread.daemon = True
+    thread.start()
 
+    return jsonify({
+        "message": "Sync process started in the background.",
+        "task_id": task_id,
+        "status_url": f"/sync-status/{task_id}"
+    }), 202
+
+@app.route("/sync-status/<task_id>", methods=["GET"])
+def get_sync_status(task_id):
+    """Endpoint to check the status of a background sync task."""
+    task = background_tasks.get(task_id)
+    if not task:
+        return jsonify({"error": "Task not found"}), 404
+
+    if task["status"] == "running":
+        response = {"status": "running"}
+    else:
+        response = {
+            "status": task["status"],
+            "result": task["result"]
+        }
+    return jsonify(response), 200
 
 @app.route("/trigger-obd-closed-case", methods=["POST"])
 @log_request_input("/trigger-obd-closed-case")
