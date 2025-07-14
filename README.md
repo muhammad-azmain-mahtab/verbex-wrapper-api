@@ -285,7 +285,7 @@ In Developer Console:
     trigger CaseTrigger on Case (after update) {
         for (Case c : Trigger.new) {
             Case oldCase = Trigger.oldMap.get(c.Id);
-            if (c.Status == 'Closed') {
+            if (c.Status == 'Closed' && oldCase.Status != 'Closed') {
                 CaseAPIHandler.sendCaseData(c.Id);
             }
         }
