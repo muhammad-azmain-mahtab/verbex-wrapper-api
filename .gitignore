@@ -1,1 +1,5 @@
 .env
+
+# Temporary Dozzle files
+docker-compose.logs.yaml
+users.yml

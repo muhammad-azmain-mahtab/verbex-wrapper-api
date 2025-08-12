@@ -6,3 +6,4 @@ SQLAlchemy==2.0.30
 psycopg2-binary==2.9.9
 APScheduler==3.10.4
 python-dotenv
+Flask-Mail==0.9.1

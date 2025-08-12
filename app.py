@@ -1,4 +1,7 @@
+import logging
+import json
 from flask import Flask, request, jsonify, make_response
+from flask_mail import Mail, Message
 import requests
 from urllib.parse import quote_plus
 from functools import wraps
@@ -13,9 +16,47 @@ from datetime import datetime, timezone
 import time
 import threading
 import uuid
+import pytz
+from datetime import datetime
+
+class BDTimeFormatter(logging.Formatter):
+    def formatTime(self, record, datefmt=None):
+        tz = pytz.timezone('Asia/Dhaka')
+        dt = datetime.fromtimestamp(record.created, tz)
+        if datefmt:
+            s = dt.strftime(datefmt)
+        else:
+            s = dt.strftime("%Y-%m-%d %H:%M:%S")
+        return s
+
+bd_formatter = BDTimeFormatter('%(asctime)s %(levelname)s [%(name)s] %(message)s')
+
+stream_handler = logging.StreamHandler()
+stream_handler.setFormatter(bd_formatter)
+
+# Uncomment the next lines to log to a file
+# file_handler = logging.FileHandler('app.log')
+# file_handler.setFormatter(bd_formatter)
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+logger.handlers = []  # Remove default handlers
+logger.addHandler(stream_handler)
+# logger.addHandler(file_handler)  # Uncomment to enable file logging
 
 load_dotenv()
 app = Flask(__name__)
+
+# Flask-Mail configuration
+app.config['MAIL_SERVER'] = os.getenv('MAIL_SERVER', 'smtp.gmail.com')
+app.config['MAIL_PORT'] = int(os.getenv('MAIL_PORT', 587))
+app.config['MAIL_USE_TLS'] = os.getenv('MAIL_USE_TLS', 'true').lower() == 'true'
+app.config['MAIL_USE_SSL'] = os.getenv('MAIL_USE_SSL', 'false').lower() == 'true'
+app.config['MAIL_USERNAME'] = os.getenv('MAIL_USERNAME')
+app.config['MAIL_PASSWORD'] = os.getenv('MAIL_PASSWORD')
+app.config['MAIL_DEFAULT_SENDER'] = os.getenv('MAIL_DEFAULT_SENDER', app.config['MAIL_USERNAME'])
+
+mail = Mail(app)
 
 background_tasks = {}
 
@@ -46,21 +87,41 @@ SALESFORCE_INSTANCE_URL = os.getenv("SALESFORCE_INSTANCE_URL")
 # APScheduler
 SYNC_INTERVAL_MINUTES = int(os.getenv("SYNC_INTERVAL_MINUTES")) 
 
+# Log every access
+@app.before_request
+def log_access():
+    logger.info(f"[ACCESS] {request.remote_addr} {request.method} {request.path}")
+
 def log_request_input(endpoint_name):
+    # ANSI color codes
+    COLOR_BLUE = '\033[94m'
+    COLOR_GREEN = '\033[92m'
+    COLOR_YELLOW = '\033[93m'
+    COLOR_RESET = '\033[0m'
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
+            import time
             data = request.get_json()
-            print("===============================================================================")
-            print(f"[{endpoint_name}] Request:")
-            print(data)
+            try:
+                pretty_request = json.dumps(data, indent=2, ensure_ascii=False)
+            except Exception:
+                pretty_request = str(data)
+            colored_endpoint = f"{COLOR_BLUE}{endpoint_name}{COLOR_RESET}"
+            logger.info(f"[{colored_endpoint}] Request: {pretty_request}")
 
+            start_time = time.perf_counter()
             response = func(*args, **kwargs)
+            elapsed = time.perf_counter() - start_time
 
             resp = make_response(response)
-            print(f"[{endpoint_name}] Response:")
-            print(resp.get_data(as_text=True))
-            print("===============================================================================")
+            try:
+                resp_data = resp.get_data(as_text=True)
+                pretty_response = json.dumps(json.loads(resp_data), indent=2, ensure_ascii=False)
+            except Exception:
+                pretty_response = resp_data
+            logger.info(f"[{COLOR_GREEN}{endpoint_name}{COLOR_RESET}] Response: {pretty_response}")
+            logger.info(f"[{COLOR_YELLOW}{endpoint_name}{COLOR_RESET}] Response Took: {elapsed:.3f} seconds.")
 
             return response
         return wrapper
@@ -69,6 +130,34 @@ def log_request_input(endpoint_name):
 @app.route("/", methods=["GET"])
 def health_check():
     return jsonify({"status": "API is running"}), 200
+
+@app.route("/test-email", methods=["POST"])
+@log_request_input("/test-email")
+def test_email():
+    data = request.get_json() or {}
+    email = data.get("email")
+    name = data.get("name", "Customer")
+    if not email:
+        return jsonify({"error": "Missing 'email' in request body"}), 400
+    try:
+        msg = Message(
+            subject="Test Email from Verbex Wrapper API",
+            recipients=[email],
+            body=f"""
+Hello {name},
+
+This is a test email from your Verbex Wrapper API Flask-Mail setup.
+
+If you received this, your email configuration is working!
+
+Best regards,
+Support Team
+"""
+        )
+        mail.send(msg)
+        return jsonify({"message": f"Test email sent to {email}"}), 200
+    except Exception as e:
+        return jsonify({"error": f"Failed to send email: {str(e)}"}), 500
 
 def get_magento_token():
     url = f"{MAGENTO_BASE_URL}/rest/V1/integration/admin/token"
@@ -156,6 +245,137 @@ def get_products():
     except requests.exceptions.RequestException as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route("/product-order", methods=["POST"])
+@log_request_input("/product-order")
+def product_order():
+    data = request.get_json() or {}
+    customer_name = data.get("customer_name")
+    phone = data.get("phone")
+    address = data.get("address")
+    product_name = data.get("product_name")
+    sku = data.get("sku")
+    price = data.get("price")
+    quantity = data.get("quantity")
+    email = data.get("email")
+
+    # Validate required fields
+    missing = [k for k in ["customer_name", "phone", "address", "product_name", "sku", "price", "quantity"] if not data.get(k)]
+    if missing:
+        return jsonify({"error": f"Missing required fields: {', '.join(missing)}"}), 400
+
+    try:
+        access_token = get_salesforce_token()
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json"
+        }
+
+        # Get or create Account by phone
+        account_query = f"SELECT Id FROM Account WHERE Phone = '{phone}' ORDER BY CreatedDate DESC LIMIT 1"
+        encoded_query = quote_plus(account_query)
+        account_url = f"{SALESFORCE_INSTANCE_URL}/services/data/v59.0/query?q={encoded_query}"
+        account_response = requests.get(account_url, headers=headers)
+        account_response.raise_for_status()
+        account_data = account_response.json()
+        if not account_data["records"]:
+            # Create new Account
+            create_account_payload = {
+                "Name": customer_name,
+                "Phone": phone,
+                "BillingStreet": address
+            }
+            create_url = f"{SALESFORCE_INSTANCE_URL}/services/data/v59.0/sobjects/Account"
+            create_response = requests.post(create_url, headers=headers, json=create_account_payload)
+            create_response.raise_for_status()
+            account_id = create_response.json().get("id")
+        else:
+            account_id = account_data["records"][0]["Id"]
+
+        # Create a delivery ticket (Case) for the product delivery first
+        case_payload = {
+            "Subject": f"Delivery for order: {product_name}",
+            "Description": f"Deliver {quantity} x {product_name} (SKU: {sku}) to customer {customer_name}, phone: {phone}, address: {address}.",
+            "Status": "New",
+            "Priority": "Medium",
+            "Origin": "Web",
+            "AccountId": account_id,
+            "Type": "Pending",
+            "Reason": "Delivery"
+        }
+        case_url = f"{SALESFORCE_INSTANCE_URL}/services/data/v59.0/sobjects/Case"
+        case_response = requests.post(case_url, headers=headers, json=case_payload)
+        case_response.raise_for_status()
+        case_id = case_response.json().get("id")
+
+        # Get Case Number using Case ID
+        case_lookup_url = f"{SALESFORCE_INSTANCE_URL}/services/data/v59.0/sobjects/Case/{case_id}"
+        case_lookup_response = requests.get(case_lookup_url, headers=headers)
+        case_lookup_response.raise_for_status()
+        case_data = case_lookup_response.json()
+        case_number = case_data.get("CaseNumber")
+
+        # Create Opportunity (order) for the Account, storing the delivery case number
+        from datetime import datetime
+        close_date = datetime.utcnow().strftime("%Y-%m-%d")
+        opportunity_payload = {
+            "Name": f"Order for {product_name}",
+            "AccountId": account_id,
+            "StageName": "Closed Won",
+            "CloseDate": close_date,
+            "Amount": float(price) * int(quantity),
+            "Description": f"SKU: {sku}, Quantity: {quantity}, Price: {price}",
+            "DeliveryInstallationStatus__c": "In Progress",
+            "TrackingNumber__c": case_number
+        }
+        opp_url = f"{SALESFORCE_INSTANCE_URL}/services/data/v59.0/sobjects/Opportunity"
+        opp_response = requests.post(opp_url, headers=headers, json=opportunity_payload)
+        opp_response.raise_for_status()
+        opp_id = opp_response.json().get("id")
+
+        # Send confirmation email if email is provided
+        if email:
+            try:
+                total_amount = float(price) * int(quantity)
+                msg = Message(
+                    subject=f"Order Confirmation - Order #{case_number}",
+                    recipients=[email],
+                    body=f"""
+Dear {customer_name},
+
+Your order has been placed successfully! Here are the details:
+
+Order Number: {case_number}
+Product: {product_name}
+SKU: {sku}
+Quantity: {quantity}
+Price per unit: {price} BDT
+Total Amount: {total_amount} BDT
+
+Delivery Address: {address}
+Phone: {phone}
+
+Your product will be delivered soon. You can track your delivery using the order number above.
+
+Thank you for your purchase!
+Best regards,
+Samsung Sales Team
+"""
+                )
+                mail.send(msg)
+            except Exception as mail_err:
+                print(f"[EMAIL ERROR] Could not send email to {email}: {mail_err}")
+
+        return jsonify({
+            "message": "Order and delivery ticket stored in Salesforce successfully.",
+            "opportunity_id": opp_id,
+            "delivery_case_id": case_id,
+            "delivery_case_number": case_number
+        }), 201
+    except requests.exceptions.RequestException as e:
+        return jsonify({"error": str(e)}), 500
+    except Exception as e:
+        return jsonify({"error": f"Unexpected error: {str(e)}"}), 500
+
 @app.route("/salesforce-account", methods=["POST"])
 @log_request_input("/salesforce-account")
 def get_salesforce_account():
@@ -232,6 +452,7 @@ def create_salesforce_ticket():
     case_type = data.get("type", "Pending")
     case_reason = data.get("reason", "Pending")
     customer_name = data.get("customer_name")
+    email = data.get("email", "")
 
     if not phone:
         return jsonify({"error": "Missing 'phone' in request body"}), 400
@@ -290,6 +511,33 @@ def create_salesforce_ticket():
 
         case_data = case_lookup_response.json()
         case_number = case_data.get("CaseNumber")
+
+        if email:
+            try:
+                msg = Message(
+                    subject=f"Your Ticket #{case_number} has been created",
+                    recipients=[email],
+                    body=f"""
+Dear {customer_name or 'Customer'},
+
+Your support ticket has been created successfully. Here are the details:
+
+Ticket Number: {case_number}
+Subject: {subject}
+Description: {description}
+Status: {status}
+Priority: {priority}
+Type: {case_type}
+Reason: {case_reason}
+
+Thank you for contacting us.
+Best regards,
+Samsung Customer Support Team
+"""
+                )
+                mail.send(msg)
+            except Exception as mail_err:
+                print(f"[EMAIL ERROR] Could not send email to {email}: {mail_err}")
 
         return jsonify({
             "message": "Case created successfully",
@@ -496,6 +744,76 @@ def fetch_and_store_calls(agent_id=IN_ENG_AGENT_ID, log_auto=False):
             "error": str(e)
         }
 
+@app.route("/salesforce-tickets", methods=["POST"])
+@log_request_input("/salesforce-tickets")
+def get_salesforce_tickets():
+    data = request.get_json() or {}
+    case_number = data.get("case_number")
+    owner_phone = data.get("owner_phone")
+    reason = data.get("reason")
+
+    if not (case_number or (owner_phone and reason)):
+        return jsonify({"error": "Provide either 'case_number' or both 'owner_phone' and 'reason' in request body"}), 400
+
+    try:
+        access_token = get_salesforce_token()
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json"
+        }
+
+        if case_number:
+            if len(case_number) < 8:
+                case_number = case_number.zfill(8)
+            soql = f"""
+                SELECT AccountId, CaseNumber, ClosedDate, CreatedDate, 
+                       Description, Reason, Status, Subject, Type
+                FROM Case
+                WHERE CaseNumber = '{case_number}'
+            """
+            query_url = f"{SALESFORCE_INSTANCE_URL}/services/data/v59.0/query?q={quote_plus(soql)}"
+            response = requests.get(query_url, headers=headers)
+            response.raise_for_status()
+            data = response.json()
+            records = data.get("records", [])
+            
+            # Remove attributes field from each record
+            for record in records:
+                if "attributes" in record:
+                    del record["attributes"]
+            
+            return jsonify({"tickets": records}), 200
+
+        # Else, search by Reason and phone using JOIN to avoid multiple API calls
+        soql = f"""
+            SELECT AccountId, CaseNumber, ClosedDate, CreatedDate,
+                   Description, Reason, Status, Subject, Type, Account.Phone
+            FROM Case
+            WHERE Reason = '{reason}' AND Account.Phone = '{owner_phone}'
+        """
+        query_url = f"{SALESFORCE_INSTANCE_URL}/services/data/v59.0/query?q={quote_plus(soql)}"
+        response = requests.get(query_url, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+        records = data.get("records", [])
+
+        # Add AccountPhone field to each record for consistency
+        tickets = []
+        for rec in records:
+            # Remove attributes field
+            if "attributes" in rec:
+                del rec["attributes"]
+            
+            rec["AccountPhone"] = rec.get("Account", {}).get("Phone") if rec.get("Account") else None
+            # Remove the nested Account object to keep response clean
+            if "Account" in rec:
+                del rec["Account"]
+            tickets.append(rec)
+
+        return jsonify({"tickets": tickets}), 200
+    except requests.exceptions.RequestException as e:
+        return jsonify({"error": str(e)}), 500
+
 def fetch_salesforce_cases():
     access_token = get_salesforce_token()
     headers = {
@@ -556,7 +874,7 @@ def fetch_salesforce_cases():
 # Endpoint to trigger outbound call manually
 @app.route("/trigger-outbound-call", methods=["POST"])
 def trigger_outbound_call(to_number= "+8801852341413",
-                          case_id = "00001100", 
+                          case_id = "0000169", 
                           case_status = "Fixed", 
                           case_subject = "Broken TV during delivery", 
                           case_description = "The delivery person accidentally dropped the TV, resulting in damage. Requesting a replacement.", 
@@ -565,6 +883,7 @@ def trigger_outbound_call(to_number= "+8801852341413",
                           case_created = "2025-06-18T04:51:06.000+0000",
                           customer_note = "TV bulbs fixed inside panel, replaced with new ones."): 
 
+    
     if case_category == "Service" and case_status == "Fixed":
         case_status = "Product Fixed"
     elif case_category == "Service" and case_status == "Not Fixed":
@@ -836,7 +1155,7 @@ def trigger_obd_closed_case():
 
         call_response = trigger_outbound_call(
             to_number=account_phone,
-            case_id=case_id,
+            case_id=case_number,
             case_status=case_type,
             case_subject=subject,
             case_description=description,
